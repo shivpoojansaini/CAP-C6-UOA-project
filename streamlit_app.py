@@ -331,13 +331,18 @@ def load_face_detector():
 @st.cache_resource
 def load_watermark_model():
     """Load and cache the watermark injection model."""
+    return load_watermark_model_with_path(WATERMARK_MODEL_PATH)
+
+
+def load_watermark_model_with_path(model_path):
+    """Load watermark model from a specific path."""
     device = get_device()
 
-    if not os.path.exists(WATERMARK_MODEL_PATH):
-        st.warning(f"Watermark model not found at {WATERMARK_MODEL_PATH}")
+    if not os.path.exists(model_path):
+        st.warning(f"Watermark model not found at {model_path}")
         return None, device
 
-    model = torch.load(WATERMARK_MODEL_PATH, map_location=device, weights_only=False)
+    model = torch.load(model_path, map_location=device, weights_only=False)
     model.to(device)
     model.eval()
 
@@ -662,10 +667,7 @@ def main():
             face_detector = load_face_detector()
 
             if enable_watermark:
-                # Update watermark path if changed
-                global WATERMARK_MODEL_PATH
-                WATERMARK_MODEL_PATH = watermark_path
-                watermark_model, _ = load_watermark_model()
+                watermark_model, _ = load_watermark_model_with_path(watermark_path)
             else:
                 watermark_model = None
 
