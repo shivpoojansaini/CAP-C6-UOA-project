@@ -70,6 +70,8 @@ from . import (
 )
 from photomaker.identity_prompt_parser import extract_identity_prompt_map_clean
 from photomaker.identity_control_attn import SpatialRoutingProcessor
+from layered.masks import create_half_masks
+from photomaker.identity_slot_unet import IdentitySlotUNet
 
 # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.rescale_noise_cfg
 def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
@@ -679,6 +681,7 @@ class PhotoMakerStableDiffusionXLAdapterPipeline(StableDiffusionXLAdapterPipelin
         """
         print("🔥 id_pixel_values:", None if id_pixel_values is None else id_pixel_values.shape)
         print("🔥 id_embeds:", None if id_embeds is None else id_embeds.shape)
+        print("🔥 CUSTOM PIPELINE FILE LOADED 🔥")
         height, width = self._default_height_width(height, width, image)
         device = self._execution_device
         
@@ -977,7 +980,7 @@ class PhotoMakerStableDiffusionXLAdapterPipeline(StableDiffusionXLAdapterPipelin
             # 🔥 Normalize + Equalize + Scale Identity Embeddings
             # ---------------------------------------
 
-            scale_factor = 28.0  # slightly lower than 35
+            scale_factor = 45.0  # slightly lower than 35
 
             # 1️⃣ Normalize each identity token
             id_embeds = torch.nn.functional.normalize(id_embeds, dim=-1)
@@ -1008,7 +1011,7 @@ class PhotoMakerStableDiffusionXLAdapterPipeline(StableDiffusionXLAdapterPipelin
             # Inject
             # ---------------------------------------
             prompt_embeds = self.id_encoder(
-                id_pixel_values,
+               id_pixel_values,
                 prompt_embeds,
                 class_tokens_mask,
                 id_embeds
@@ -1142,10 +1145,13 @@ class PhotoMakerStableDiffusionXLAdapterPipeline(StableDiffusionXLAdapterPipelin
                         base_masks=self.identity_base_masks,
                         tokenizer=self.tokenizer,
                         text_input_ids=self.processor_text_input_ids,
-                        identity_bias=2.0,
-                        spatial_strength=0.8,
-                        outside_suppress=0.7,
-                        routing_strength=4.0,
+
+                        # --- Routing strengths ---
+                        identity_bias=2.5,              # own identity boost
+                        spatial_strength=1.0,           # spatial emphasis
+                        outside_suppress=1.5,           # suppress outside region
+                        routing_strength=6.0,           # attribute boost
+                        cross_identity_strength=6.0,    # suppress other identities
                     )
 
                 else:
@@ -1156,75 +1162,130 @@ class PhotoMakerStableDiffusionXLAdapterPipeline(StableDiffusionXLAdapterPipelin
 
         else:
             print("🚫 Routing disabled. Using default attention processors.")
+        
+        # Compute warmup steps (required for callback logic)
+        num_warmup_steps = max(
+            len(timesteps) - num_inference_steps * self.scheduler.order,
+            0
+        )
+       
+        # ==================================================
+        # 🔥 11. Denoising loop
+        # ==================================================
 
+        # Set identity data once before loop
+        if isinstance(self.unet, IdentitySlotUNet):
+            if id_embeds.dim() == 2:
+                id_embeds = id_embeds.unsqueeze(0)
 
-
-
-
-
-
-
-
-
-
-            
-
-
-        # 11. Denoising loop
-        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
-        # Apply denoising_end
-        if denoising_end is not None and isinstance(denoising_end, float) and denoising_end > 0 and denoising_end < 1:
-            discrete_timestep_cutoff = int(
-                round(
-                    self.scheduler.config.num_train_timesteps
-                    - (denoising_end * self.scheduler.config.num_train_timesteps)
-                )
+            self.unet.set_identity_data(
+                embeddings=id_embeds,
+                bboxes=self.identity_bboxes
             )
-            num_inference_steps = len(list(filter(lambda ts: ts >= discrete_timestep_cutoff, timesteps)))
-            timesteps = timesteps[:num_inference_steps]
+
+        z_A = latents.clone()
+        z_B = latents.clone()
+
+        mask_A, mask_B = create_half_masks(z_A)
+        mask_A = mask_A.to(dtype=z_A.dtype, device=z_A.device)
+        mask_B = mask_B.to(dtype=z_A.dtype, device=z_A.device)
+
+
+        # --------------------------------------------------
+        # 🔎 Identity Influence Logging Buffers
+        # --------------------------------------------------
+
+        identity_A_strength = []
+        identity_B_strength = []
+        identity_ratio = []
+
+        identity_A_spatial = []
+        identity_B_spatial = []
+        if isinstance(self.unet, IdentitySlotUNet):
+                    self.unet.debug_similarity = []
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                # 🔥 Inject diffusion step into custom attention processors
-                for name, proc in self.unet.attn_processors.items():
-                    if hasattr(proc, "set_step"):
-                        proc.set_step(i, len(timesteps))
-
-
-                # expand the latents if we are doing classifier free guidance
-                latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
-
-                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+                
+                # 🔥 Set current step here
+                if isinstance(self.unet, IdentitySlotUNet):
+                    self.unet.current_step = i
+                # --------------------------------------------------
+                # 🔥 1️⃣ DELAYED MERGE LOGIC (FIRST)
+                # --------------------------------------------------
 
                 if i <= start_merge_step:
                     current_prompt_embeds = torch.cat(
                         [negative_prompt_embeds, prompt_embeds_text_only], dim=0
                     ) if self.do_classifier_free_guidance else prompt_embeds_text_only
+
                     add_text_embeds = torch.cat(
                         [negative_pooled_prompt_embeds, pooled_prompt_embeds_text_only], dim=0
-                        ) if self.do_classifier_free_guidance else pooled_prompt_embeds_text_only
+                    ) if self.do_classifier_free_guidance else pooled_prompt_embeds_text_only
                 else:
                     current_prompt_embeds = torch.cat(
                         [negative_prompt_embeds, prompt_embeds], dim=0
                     ) if self.do_classifier_free_guidance else prompt_embeds
+
                     add_text_embeds = torch.cat(
                         [negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0
-                        ) if self.do_classifier_free_guidance else pooled_prompt_embeds
+                    ) if self.do_classifier_free_guidance else pooled_prompt_embeds
 
-                if i < int(num_inference_steps * adapter_conditioning_factor) and (use_adapter):
-                    down_intrablock_additional_residuals = [state.clone() for state in adapter_state]
+                # --------------------------------------------------
+                # 2️⃣ ADAPTER CONDITIONING
+                # --------------------------------------------------
+
+                if i < int(num_inference_steps * adapter_conditioning_factor) and use_adapter:
+                    down_intrablock_additional_residuals = [
+                        state.clone() for state in adapter_state
+                    ]
                 else:
                     down_intrablock_additional_residuals = None
 
-                added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
+                # --------------------------------------------------
+                # 3️⃣ BUILD added_cond_kwargs
+                # --------------------------------------------------
+
+                added_cond_kwargs = {
+                    "text_embeds": add_text_embeds,
+                    "time_ids": add_time_ids,
+                }
+
                 if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
                     added_cond_kwargs["image_embeds"] = image_embeds
 
-                # predict the noise residual
-                noise_pred = self.unet(
-                    latent_model_input,
+                # --------------------------------------------------
+                # ==========================================================
+                # 🔎 TEXT-ONLY BASELINES (FOR IDENTITY ATTRIBUTION)
+                # ==========================================================
+
+                # 1️⃣ Disable identity slots for pure text baseline
+                if isinstance(self.unet, IdentitySlotUNet):
+                    self.unet.set_active_slots([])
+
+                # Build CFG embeddings for text-only prompt
+                if self.do_classifier_free_guidance:
+                    text_only_embeds_cfg = torch.cat(
+                        [negative_prompt_embeds, prompt_embeds_text_only], dim=0
+                    )
+                else:
+                    text_only_embeds_cfg = prompt_embeds_text_only
+
+                # ----------------------------------------------------------
+                # 🔹 Baseline for Stream A (uses z_A)
+                # ----------------------------------------------------------
+
+                latent_text_input_A = (
+                    torch.cat([z_A] * 2) if self.do_classifier_free_guidance else z_A
+                )
+                latent_text_input_A = self.scheduler.scale_model_input(
+                    latent_text_input_A, t
+                )
+
+                noise_text_only_A = self.unet(
+                    latent_text_input_A,
                     t,
-                    encoder_hidden_states=current_prompt_embeds,
+                    encoder_hidden_states=text_only_embeds_cfg,
                     timestep_cond=timestep_cond,
                     cross_attention_kwargs=cross_attention_kwargs,
                     down_intrablock_additional_residuals=down_intrablock_additional_residuals,
@@ -1232,25 +1293,340 @@ class PhotoMakerStableDiffusionXLAdapterPipeline(StableDiffusionXLAdapterPipelin
                     return_dict=False,
                 )[0]
 
-                # perform guidance
                 if self.do_classifier_free_guidance:
-                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                    noise_uncond_A_to, noise_text_A_to = noise_text_only_A.chunk(2)
+                    noise_text_only_A = (
+                        noise_uncond_A_to
+                        + guidance_scale * (noise_text_A_to - noise_uncond_A_to)
+                    )
 
-                if self.do_classifier_free_guidance and guidance_rescale > 0.0:
-                    # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
-                    noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
+                # ----------------------------------------------------------
+                # 🔹 Baseline for Stream B (uses z_B)
+                # ----------------------------------------------------------
 
-                # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+                latent_text_input_B = (
+                    torch.cat([z_B] * 2) if self.do_classifier_free_guidance else z_B
+                )
+                latent_text_input_B = self.scheduler.scale_model_input(
+                    latent_text_input_B, t
+                )
 
-                # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                noise_text_only_B = self.unet(
+                    latent_text_input_B,
+                    t,
+                    encoder_hidden_states=text_only_embeds_cfg,
+                    timestep_cond=timestep_cond,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                    down_intrablock_additional_residuals=down_intrablock_additional_residuals,
+                    added_cond_kwargs=added_cond_kwargs,
+                    return_dict=False,
+                )[0]
+
+                if self.do_classifier_free_guidance:
+                    noise_uncond_B_to, noise_text_B_to = noise_text_only_B.chunk(2)
+                    noise_text_only_B = (
+                        noise_uncond_B_to
+                        + guidance_scale * (noise_text_B_to - noise_uncond_B_to)
+                    )
+
+                # ==========================================================
+                # 🔥 IMPORTANT: DO NOT ACTIVATE SLOTS HERE
+                # Slots will be set properly before Stream A and Stream B
+                # ==========================================================
+
+
+                # --------------------------------------------------
+                # STREAM-SPECIFIC TOKEN MASKING
+                # --------------------------------------------------
+
+                prompt_A = current_prompt_embeds.clone()
+                prompt_B = current_prompt_embeds.clone()
+
+                if hasattr(self, "identity_token_indices") and len(self.identity_token_indices) >= 2:
+                    identity_A_indices = self.identity_token_indices[0]
+                    identity_B_indices = self.identity_token_indices[1]
+
+                    prompt_A[:, identity_B_indices, :] *= 0.0
+                    prompt_B[:, identity_A_indices, :] *= 0.0
+                
+                
+                # --------------------------------------------------
+                # STREAM A
+                # --------------------------------------------------
+
+                if isinstance(self.unet, IdentitySlotUNet):
+                    self.unet.set_active_slots([0])
+
+                latent_A_input = torch.cat([z_A] * 2) if self.do_classifier_free_guidance else z_A
+                latent_A_input = self.scheduler.scale_model_input(latent_A_input, t)
+
+                noise_pred_A = self.unet(
+                    latent_A_input,
+                    t,
+                    encoder_hidden_states=prompt_A,
+                    timestep_cond=timestep_cond,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                    down_intrablock_additional_residuals=down_intrablock_additional_residuals,
+                    added_cond_kwargs=added_cond_kwargs,
+                    return_dict=False,
+                )[0]
+                # 🔬 DEBUG HERE
+                if isinstance(self.unet, IdentitySlotUNet):
+                    print("Similarity length after Stream A:",
+                        len(self.unet.debug_similarity))
+                
+
+                if self.do_classifier_free_guidance:
+                    noise_uncond_A, noise_text_A = noise_pred_A.chunk(2)
+                    noise_pred_A = noise_uncond_A + guidance_scale * (noise_text_A - noise_uncond_A)
+
+                # --------------------------------------------------
+                # STREAM B
+                # --------------------------------------------------
+
+                if isinstance(self.unet, IdentitySlotUNet):
+                    self.unet.set_active_slots([1])
+
+                latent_B_input = torch.cat([z_B] * 2) if self.do_classifier_free_guidance else z_B
+                latent_B_input = self.scheduler.scale_model_input(latent_B_input, t)
+
+                noise_pred_B = self.unet(
+                    latent_B_input,
+                    t,
+                    encoder_hidden_states=prompt_B,
+                    timestep_cond=timestep_cond,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                    down_intrablock_additional_residuals=down_intrablock_additional_residuals,
+                    added_cond_kwargs=added_cond_kwargs,
+                    return_dict=False,
+                )[0]
+
+                if self.do_classifier_free_guidance:
+                    noise_uncond_B, noise_text_B = noise_pred_B.chunk(2)
+                    noise_pred_B = noise_uncond_B + guidance_scale * (noise_text_B - noise_uncond_B)
+
+
+                # --------------------------------------------------
+                # 🔎 IDENTITY INFLUENCE COMPUTATION
+                # --------------------------------------------------
+
+                # Compute identity residuals
+                residual_A = noise_pred_A - noise_text_only_A
+                residual_B = noise_pred_B - noise_text_only_B
+
+
+
+                # Global magnitude
+                A_strength = torch.norm(residual_A).item()
+                B_strength = torch.norm(residual_B).item()
+
+                # Optional: relative contribution to final noise
+                total_norm = torch.norm(mask_A * noise_pred_A + mask_B * noise_pred_B).item() + 1e-8
+                ratio_A = A_strength / total_norm
+                ratio_B = B_strength / total_norm
+
+                # Optional: spatial-only influence
+                A_spatial = torch.norm(mask_A * residual_A).item()
+                B_spatial = torch.norm(mask_B * residual_B).item()
+
+                # Log values
+                identity_A_strength.append(A_strength)
+                identity_B_strength.append(B_strength)
+                identity_ratio.append((ratio_A, ratio_B))
+                identity_A_spatial.append(A_spatial)
+                identity_B_spatial.append(B_spatial)
+                # --------------------------------------------------
+                # BLEND NOISE
+                # --------------------------------------------------
+
+                noise_pred = mask_A * noise_pred_A + mask_B * noise_pred_B
+
+                latents = self.scheduler.step(
+                    noise_pred,
+                    t,
+                    latents,
+                    **extra_step_kwargs,
+                    return_dict=False
+                )[0]
+
+                z_A = latents.clone()
+                z_B = latents.clone()
+                # --------------------------------------------------
+                # --------------------------------------------------
+                # 🔎 DEBUG IMAGE AT start_merge_step + MID PHASE
+                # 🔬 Identity Similarity-Based Bounding Box (UNet space)
+                # --------------------------------------------------
+
+                mid_step = int(num_inference_steps * 0.5)
+
+                if i == start_merge_step or i == mid_step:
+
+                    phase_name = (
+                        "start_merge_step"
+                        if i == start_merge_step
+                        else "mid_phase"
+                    )
+
+                    print(f"\n🧪 Decoding image at {phase_name} = {i}")
+
+                    debug_latents = latents.clone()
+
+                    # -----------------------------
+                    # Safe VAE decode
+                    # -----------------------------
+                    needs_upcasting = (
+                        self.vae.dtype == torch.float16
+                        and self.vae.config.force_upcast
+                    )
+
+                    if needs_upcasting:
+                        self.upcast_vae()
+                        debug_latents = debug_latents.to(
+                            next(iter(self.vae.post_quant_conv.parameters())).dtype
+                        )
+
+                    decoded = self.vae.decode(
+                        debug_latents / self.vae.config.scaling_factor,
+                        return_dict=False
+                    )[0]
+
+                    debug_images = self.image_processor.postprocess(
+                        decoded,
+                        output_type="pil"
+                    )
+
+                    debug_image = debug_images[0]
+
+                    # --------------------------------------------------
+                    # 🔬 GET ARGMAX IDENTITY SEGMENTATION
+                    # --------------------------------------------------
+
+                    import numpy as np
+                    from PIL import Image
+                    import torch.nn.functional as F
+
+                    if (
+                        hasattr(self.unet, "debug_similarity")
+                        and len(self.unet.debug_similarity) > 0
+                    ):
+
+                        similarity_entry = self.unet.debug_similarity[-1]
+
+                        if "scores" not in similarity_entry:
+                            print("⚠️ No full score tensor found (check _inject logging).")
+
+                        else:
+                            scores = similarity_entry["scores"]  # [B, N, H, W]
+
+                            # Remove batch dimension
+                            scores = scores[0]  # [N, H, W]
+
+                            if scores.shape[0] < 2:
+                                print("⚠️ Only one identity present — argmax segmentation meaningless.")
+                            else:
+                                # ---------------------------------
+                                # 1️⃣ Argmax over identities
+                                # ---------------------------------
+                                identity_map = torch.argmax(scores, dim=0)  # [H, W]
+
+                                # ---------------------------------
+                                # 2️⃣ Upsample to image resolution
+                                # ---------------------------------
+                                identity_map = identity_map.unsqueeze(0).unsqueeze(0).float()
+
+                                img_w, img_h = debug_image.size
+
+                                identity_map_up = F.interpolate(
+                                    identity_map,
+                                    size=(img_h, img_w),
+                                    mode="nearest"
+                                )[0, 0].long()  # [H_img, W_img]
+
+                                identity_np = identity_map_up.cpu().numpy()
+
+                                # ---------------------------------
+                                # 3️⃣ Define identity colors
+                                # ---------------------------------
+                                colors = [
+                                    (255, 0, 0),    # Identity 0 → Red
+                                    (0, 0, 255),    # Identity 1 → Blue
+                                    (0, 255, 0),    # Identity 2 → Green
+                                    (255, 255, 0),  # Identity 3 → Yellow
+                                ]
+
+                                overlay = np.zeros((img_h, img_w, 3), dtype=np.uint8)
+
+                                num_ids = scores.shape[0]
+
+                                for i_id in range(min(num_ids, len(colors))):
+                                    overlay[identity_np == i_id] = colors[i_id]
+
+                                overlay_img = Image.fromarray(overlay)
+
+                                # ---------------------------------
+                                # 4️⃣ Blend overlay with decoded image
+                                # ---------------------------------
+                                debug_image = Image.blend(
+                                    debug_image.convert("RGBA"),
+                                    overlay_img.convert("RGBA"),
+                                    alpha=0.4
+                                )
+
+                                print("✅ Argmax identity segmentation generated")
+
+                    else:
+                        print("⚠️ No similarity map available from UNet")
+
+                    # --------------------------------------------------
+                    # Save
+                    # --------------------------------------------------
+
+                    debug_path = (
+                        f"/teamspace/studios/this_studio/PhotoMaker/Data/Output/"
+                        f"debug_{phase_name}_step_{i}.png"
+                    )
+
+                    debug_image.save(debug_path)
+
+                    print("✅ Saved debug image:", debug_path)
+                # --------------------------------------------------
+                # CALLBACK (MUST BE INSIDE LOOP)
+                # --------------------------------------------------
+
+                if i == len(timesteps) - 1 or (
+                    (i + 1) > num_warmup_steps and
+                    (i + 1) % self.scheduler.order == 0
+                ):
                     progress_bar.update()
                     if callback is not None and i % callback_steps == 0:
                         step_idx = i // getattr(self.scheduler, "order", 1)
                         callback(step_idx, t, latents)
 
+
+        # --------------------------------------------------
+        # 🔥 CLEAR IDENTITY STATE AFTER LOOP
+        # --------------------------------------------------
+
+        if isinstance(self.unet, IdentitySlotUNet):
+            self.unet.clear_identity_data()
+        # --------------------------------------------------
+        # 🔎 PRINT IDENTITY INFLUENCE CURVES
+        # --------------------------------------------------
+
+        print("\n--- Identity Influence Summary ---")
+        for i in range(len(identity_A_strength)):
+            print(
+                f"Step {i}: "
+                f"A={identity_A_strength[i]:.2f} "
+                f"B={identity_B_strength[i]:.2f} "
+                f"RatioA={identity_ratio[i][0]:.3f} "
+                f"RatioB={identity_ratio[i][1]:.3f}"
+            )
+
+       
+        
+
+                
         if not output_type == "latent":
             # make sure the VAE is in float32 mode, as it overflows in float16
             needs_upcasting = self.vae.dtype == torch.float16 and self.vae.config.force_upcast

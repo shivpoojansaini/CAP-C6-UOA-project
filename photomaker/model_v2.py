@@ -123,7 +123,9 @@ class FuseModule(nn.Module):
             token_indices = class_tokens_mask[b_idx].nonzero().flatten()
 
             # reshape into per-identity groups
-            token_indices = token_indices.view(num_inputs, num_tokens)
+            token_indices = token_indices.reshape(-1, num_tokens)
+            num_inputs = token_indices.shape[0]
+
             print("\n==============================")
             print(f"🧠 Batch {b_idx}")
             print("Token indices grouped per identity:", token_indices.tolist())

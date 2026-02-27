@@ -43,8 +43,7 @@ INPUT_IMAGES = [
 ]
 
 # Prompt - must include 'img' trigger word
-PROMPT = "a man img1 on the left and a woman img2 on the right"
-
+PROMPT = "a man img1 wearimg sunglasses  and woman img2 wearing a hat"
 # Output settings 
 OUTPUT_DIR = "/teamspace/studios/this_studio/PhotoMaker/Data/Output"
 NUM_OUTPUTS = 2
@@ -61,7 +60,7 @@ OUTPUT_HEIGHT = 1024
 
 # Generation parameters
 NUM_STEPS = 50
-GUIDANCE_SCALE = 6.0
+GUIDANCE_SCALE = 7.5
 STYLE_STRENGTH_RATIO = 20
 SEED = None  # Set to None for random seed, or specify a number
 
@@ -234,10 +233,10 @@ def load_pipeline(device):
 
     pipe.unet = IdentitySlotUNet(
         pipe.unet,
-        down_strength=0.2,
-        mid_strength=1.2,
-        up_strength=1.5,
-        temperature=0.35
+        down_strength=0.0,
+        mid_strength=0.0,
+        up_strength=0.2,
+        temperature=0.0
     )
 
 
@@ -678,7 +677,9 @@ def generate_image(pipe, face_detector, device):
     else:
         print("🔥 Active slots:", active_slots)
 
-    pipe.unet.set_active_slots(active_slots)
+    if hasattr(pipe.unet, "set_active_slots"):
+        pipe.unet.set_active_slots(active_slots)
+
     
 
     # -----------------------------------------
@@ -700,7 +701,9 @@ def generate_image(pipe, face_detector, device):
     # 🔥 Provide identity data to UNet wrapper
     # -----------------------------------------
 
-    pipe.unet.set_identity_data(id_embeds, identity_bboxes)
+    if hasattr(pipe.unet, "set_identity_data"):
+        pipe.unet.set_identity_data(id_embeds, identity_bboxes)
+
 
     images = pipe(
         prompt=prompt,
@@ -787,8 +790,10 @@ def generate_image(pipe, face_detector, device):
     # -----------------------------------------
 
     
-    pipe.unet.clear_identity_data()
-    print("🧹 Cleared identity slot data from UNet")
+    if hasattr(pipe.unet, "clear_identity_data"):
+        pipe.unet.clear_identity_data()
+        print("🧹 Cleared identity slot data from UNet")
+    
 
 
     
@@ -809,8 +814,8 @@ def main():
     pipe = load_pipeline(device)
     face_detector = load_face_detector(device)
     # 🔥 Experiment toggles
-    pipe.enable_routing = False          # disable attention routing
-    pipe.enable_slot_injection = True    # keep additive slot injection
+    pipe.enable_routing = True          # disable attention routing
+    pipe.enable_slot_injection = False    # keep additive slot injection
 
     try:
         images, used_seed = generate_image(pipe, face_detector, device)
