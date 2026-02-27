@@ -602,13 +602,16 @@ def create_demo():
                 files = gr.Files(
                     label="Upload face image(s)",
                     file_types=["image"],
+                    file_count="multiple",
+                    height=200,
                 )
                 uploaded_gallery = gr.Gallery(
-                    label="Uploaded Images",
+                    label="Uploaded Images Preview",
                     visible=True,
                     columns=4,
-                    rows=1,
-                    height=150
+                    rows=2,
+                    height=300,
+                    object_fit="contain",
                 )
 
                 prompt = gr.Textbox(
@@ -690,11 +693,13 @@ def create_demo():
                 with gr.Row():
                     output_original = gr.Image(
                         label="PhotoMaker Output",
-                        type="pil"
+                        type="pil",
+                        height=400,
                     )
                     output_watermarked = gr.Image(
                         label="Watermarked Output",
-                        type="pil"
+                        type="pil",
+                        height=400,
                     )
 
                 output_info = gr.Textbox(
