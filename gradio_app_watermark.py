@@ -590,7 +590,7 @@ def create_demo():
     4. Get both the original and watermarked output!
     """
 
-    with gr.Blocks(css=".gradio-container {width: 90% !important}") as demo:
+    with gr.Blocks() as demo:
         gr.HTML(title)
         gr.Markdown(description)
 
