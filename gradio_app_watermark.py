@@ -610,7 +610,7 @@ def create_demo():
                     visible=True,
                     columns=4,
                     rows=2,
-                    height=300,
+                    height=500,
                     object_fit="contain",
                 )
 
