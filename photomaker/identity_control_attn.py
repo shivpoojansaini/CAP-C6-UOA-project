@@ -1,8 +1,6 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from diffusers.models.attention_processor import AttnProcessor2_0
-import math
 
 
 class SpatialRoutingProcessor(AttnProcessor2_0):
@@ -14,19 +12,17 @@ class SpatialRoutingProcessor(AttnProcessor2_0):
         base_masks,
         tokenizer=None,
         text_input_ids=None,
-        identity_bias=1.5,
-        spatial_strength=0.7,
-        outside_suppress=0.5,
-        routing_strength=4.0,
-        cross_identity_strength=1.5
+        identity_bias=2.5,
+        spatial_strength=1.0,
+        outside_suppress=1.5,
+        routing_strength=6.0,
+        cross_identity_strength=8.0,
     ):
         super().__init__()
 
         self.identity_token_indices = identity_token_indices
         self.identity_prompt_map = identity_prompt_map
         self.base_masks = base_masks
-
-    
 
         self.tokenizer = tokenizer
         self.processor_text_input_ids = text_input_ids
@@ -59,7 +55,7 @@ class SpatialRoutingProcessor(AttnProcessor2_0):
         temb=None,
     ):
 
-        # Self-attention fallback
+        # Self-attention untouched
         if encoder_hidden_states is None:
             return super().__call__(
                 attn,
@@ -69,9 +65,7 @@ class SpatialRoutingProcessor(AttnProcessor2_0):
                 temb,
             )
 
-        # -----------------------------------------
         # QKV
-        # -----------------------------------------
         query = attn.to_q(hidden_states)
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
@@ -80,11 +74,7 @@ class SpatialRoutingProcessor(AttnProcessor2_0):
         key = attn.head_to_batch_dim(key)
         value = attn.head_to_batch_dim(value)
 
-      
-
-        # -----------------------------------------
-        # Attention
-        # -----------------------------------------
+        # Attention logits
         attn_scores = torch.bmm(query, key.transpose(-1, -2))
         attn_scores *= attn.scale
 
@@ -96,18 +86,14 @@ class SpatialRoutingProcessor(AttnProcessor2_0):
             batch_size, heads, spatial_tokens, text_tokens
         )
 
-        # -----------------------------------------
         # CFG-safe slice
-        # -----------------------------------------
         if batch_size % 2 == 0:
             half = batch_size // 2
             target_slice = slice(half, batch_size)
         else:
             target_slice = slice(0, batch_size)
 
-        # -----------------------------------------
-        # Spatial mask downsample
-        # -----------------------------------------
+        # Downsample masks
         spatial_size = int(spatial_tokens ** 0.5)
 
         masks = F.interpolate(
@@ -117,21 +103,19 @@ class SpatialRoutingProcessor(AttnProcessor2_0):
         ).squeeze(1)
 
         masks = masks.reshape(masks.shape[0], -1)
-        masks = (masks > 0).float().to(attn_scores.device)
+        masks = masks.float().to(attn_scores.device)
 
-        base_bias = self.identity_bias * self.spatial_strength
+        # Early-heavy schedule
+        progress = 1 - (self.current_step / max(self.total_steps, 1))
 
-        # -----------------------------------------
-        # Early-heavy routing schedule
-        # -----------------------------------------
-        progress = self.current_step / max(self.total_steps, 1)
-        progress = 1 - progress
-        routing_scale = self.routing_strength * progress
-        cross_scale = self.cross_identity_strength * progress
+        identity_boost = self.identity_bias * progress
+        routing_boost = self.routing_strength * progress
+        cross_penalty = self.cross_identity_strength * progress
+        outside_penalty = self.outside_suppress
 
-        # -----------------------------------------
-        # Spatial & Prompt Routing
-        # -----------------------------------------
+        # ---------------------------------------------------------
+        # Spatial + Prompt Routing
+        # ---------------------------------------------------------
         for identity_i, token_indices in enumerate(self.identity_token_indices):
 
             if len(token_indices) == 0:
@@ -140,47 +124,39 @@ class SpatialRoutingProcessor(AttnProcessor2_0):
             identity_mask = masks[identity_i]
             identity_mask = identity_mask.view(1, 1, spatial_tokens, 1)
 
-            # Spatial bias
+            # Boost own identity tokens inside region
             attn_scores[target_slice, :, :, token_indices] += (
-                base_bias * identity_mask
+                identity_boost * identity_mask
             )
 
+            # Suppress identity tokens outside region
             attn_scores[target_slice, :, :, token_indices] -= (
-                self.outside_suppress
-                * base_bias
-                * (1 - identity_mask)
+                outside_penalty * (1 - identity_mask)
             )
 
-            # Prompt boosting
-            allowed_prompt_tokens = self.identity_prompt_map.get(identity_i, [])
-
-            if len(allowed_prompt_tokens) > 0:
-
-                routing_mask = torch.zeros(
-                    text_tokens,
-                    device=attn_scores.device,
-                    dtype=attn_scores.dtype,
+            # Boost own attribute span
+            allowed_tokens = self.identity_prompt_map.get(identity_i, [])
+            if len(allowed_tokens) > 0:
+                attn_scores[target_slice, :, :, allowed_tokens] += (
+                    routing_boost * identity_mask
                 )
 
-                routing_mask[allowed_prompt_tokens] = 1.0
-                routing_mask = routing_mask.view(1, 1, 1, text_tokens)
-
-                attn_scores[target_slice] += (
-                    routing_scale * routing_mask * identity_mask
-                )
-
-            # Cross-identity repulsion
+            # Suppress other identities softly (not hard mask)
             for other_i, other_tokens in enumerate(self.identity_token_indices):
-                if other_i == identity_i or len(other_tokens) == 0:
+                if other_i == identity_i:
                     continue
 
                 attn_scores[target_slice, :, :, other_tokens] -= (
-                    cross_scale * identity_mask
+                    cross_penalty * identity_mask
                 )
 
-        # -----------------------------------------
+                other_span = self.identity_prompt_map.get(other_i, [])
+                if len(other_span) > 0:
+                    attn_scores[target_slice, :, :, other_span] -= (
+                        cross_penalty * identity_mask
+                    )
+
         # Softmax
-        # -----------------------------------------
         attn_scores = attn_scores.view(B_heads, spatial_tokens, text_tokens)
         attn_probs = torch.softmax(attn_scores, dim=-1)
 

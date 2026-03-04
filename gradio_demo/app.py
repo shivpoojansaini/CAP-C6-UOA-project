@@ -311,4 +311,9 @@ with gr.Blocks(css=css) as demo:
     
     gr.Markdown(article)
     
-demo.launch()
+demo.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        share=True,  # Creates public URL that bypasses Lightning AI proxy issues
+    
+)

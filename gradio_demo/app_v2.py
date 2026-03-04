@@ -313,6 +313,7 @@ with gr.Blocks(css=css) as demo:
                     sketch_image = gr.Sketchpad(
                         label="Canvas",
                         type="pil",
+                        crop_size=[1024,1024],
                         layers=False,
                         canvas_size=(350, 350),
                         brush=gr.Brush(default_size=5, colors=["#000000"], color_mode="fixed")
