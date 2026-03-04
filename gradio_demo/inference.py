@@ -5,6 +5,7 @@ Usage:
     python inference.py
 """
 
+import os
 import random
 from pathlib import Path
 from typing import Tuple, Dict
@@ -21,10 +22,13 @@ from torchvision import models
 # Configuration - SET THESE VALUES
 # ============================================================================
 
-MODEL_PATH = "/teamspace/studios/this_studio/photomaker-spatial-multi-id-layered/gradio_demo/watermark-addition_watermark_model_watermark_injection_model.pth"  # Path to full model
-INPUT_IMAGE = "/teamspace/studios/this_studio/photomaker-spatial-multi-id-layered/Data/Output/output_seed138148939_1.png"                             # Input image path
-OUTPUT_IMAGE = "/teamspace/studios/this_studio/photomaker-spatial-multi-id-layered/Data/Output/output_seed138148939_1_W.png"                                # Output path (None = auto-generate)
-CORNER = None                                        # 'top-left', 'top-right', 'bottom-left', 'bottom-right', or None for random
+# Model path: set via environment variable or place model in default location
+DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(__file__), "watermark_model.pth")
+MODEL_PATH = os.environ.get("WATERMARK_MODEL_PATH", DEFAULT_MODEL_PATH)
+
+INPUT_IMAGE = None  # Set via CLI or Gradio
+OUTPUT_IMAGE = None  # Set via CLI or Gradio
+CORNER = None  # 'top-left', 'top-right', 'bottom-left', 'bottom-right', or None for random
 
 
 # ============================================================================

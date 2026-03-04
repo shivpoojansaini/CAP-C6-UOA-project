@@ -725,6 +725,9 @@ def generate_image(pipe, face_detector, device):
 
     print("\n🔍 ArcFace Identity Fidelity Evaluation")
 
+    # Store similarity results for each generated image
+    similarity_results = []
+
     for img_idx, gen_img in enumerate(images):
 
         print(f"\n🖼 Generated Image {img_idx}")
@@ -732,10 +735,14 @@ def generate_image(pipe, face_detector, device):
         gen_array = np.array(gen_img)[:, :, ::-1]  # RGB → BGR
         gen_faces = analyze_faces(face_detector, gen_array)
 
+        img_result = {"image_idx": img_idx, "assignments": [], "error": None}
+
         if len(gen_faces) == 0:
             print("❌ No face detected in generated image")
+            img_result["error"] = "No face detected in generated image"
+            similarity_results.append(img_result)
             continue
-        
+
         # ✅ Force left → right order
         gen_faces = sorted(gen_faces, key=lambda f: f.bbox[0])
         # 🔎 DEBUG: Print bounding boxes
@@ -778,6 +785,13 @@ def generate_image(pipe, face_detector, device):
                 f"   ✅ Face {face_idx} → Identity {assigned_id} "
                 f"(Cosine: {score:.4f})"
             )
+            img_result["assignments"].append({
+                "face_idx": face_idx,
+                "identity_idx": assigned_id,
+                "similarity": float(score)
+            })
+
+        similarity_results.append(img_result)
 
 
     # -----------------------------------------
@@ -788,11 +802,8 @@ def generate_image(pipe, face_detector, device):
     if hasattr(pipe.unet, "clear_identity_data"):
         pipe.unet.clear_identity_data()
         print("🧹 Cleared identity slot data from UNet")
-    
 
-
-    
-    return images, seed
+    return images, seed, similarity_results
 
 
 def main():
@@ -813,17 +824,17 @@ def main():
     pipe.enable_slot_injection = False    # keep additive slot injection
     pipe.face_detector = face_detector
     try:
-        images, used_seed = generate_image(pipe, face_detector, device)
-        
+        images, used_seed, similarity_results = generate_image(pipe, face_detector, device)
+
         print(f"\nSaving {len(images)} image(s) to {output_dir}/")
         for i, img in enumerate(images):
             filename = f"output_seed{used_seed}_{i+1}.png"
             filepath = output_dir / filename
             img.save(filepath)
             print(f"  Saved: {filepath}")
-        
+
         print(f"\nDone! Generated {len(images)} image(s) with seed {used_seed}")
-        
+
     except ValueError as e:
         print(f"Error: {e}")
         sys.exit(1)

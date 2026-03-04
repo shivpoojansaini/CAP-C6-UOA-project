@@ -7,3 +7,4 @@ __pycache__/
 *.bin
 *.safetensors
 watermark-addition_watermark_model_watermark_injection_model.pth
+gradio_demo/.gradio
