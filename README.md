@@ -200,6 +200,96 @@ You could customize this script in [this file](gradio_demo/app.py).
 
 If you want to run it on MAC, you should follow [this Instruction](MacGPUEnv.md) and then run the app.py.
 
+---
+
+# 🚀 CAP-C6-Group-3 Extension
+
+This extension adds **Multi-Identity Face Generation with ArcFace Similarity Evaluation** and **Invisible Watermarking** capabilities.
+
+## Features
+
+- **Multi-Identity Generation**: Generate images with multiple faces using `img1`, `img2` trigger words
+- **ArcFace Similarity Scoring**: Automatic face matching with Direct/Cross/Optimal comparison modes
+- **Best Image Selection**: Automatically identifies the best generated image based on identity similarity
+- **Invisible Watermarking**: Add invisible watermarks with configurable position and strength
+- **Quality Metrics**: PSNR and SSIM measurements for watermark quality
+
+## Quick Start
+
+### 1. Run the Extended Gradio Demo
+
+```bash
+cd gradio_demo
+python gradio_app.py
+```
+
+The app will be available at `http://localhost:7860` and will also create a public share link.
+
+### 2. Environment Variables (Optional)
+
+```bash
+# Set custom watermark model path
+export WATERMARK_MODEL_PATH="/path/to/your/watermark_model.pth"
+```
+
+### 3. Usage
+
+#### Generate Tab
+1. Upload an input image containing one or more faces
+2. Enter a prompt using identity triggers:
+   - Single identity: `"a photo of img1 in a park"`
+   - Multiple identities: `"img1 and img2 standing together"`
+3. Check **"Show best image only"** to display only the highest-scoring result
+4. Click **Generate** and wait for the results
+5. View **ArcFace Identity Similarity** scores:
+   - **Direct matching**: Left face → Left identity, Right face → Right identity
+   - **Cross matching**: Left face → Right identity, Right face → Left identity
+   - **[BEST]** marker indicates the image with highest similarity
+
+#### Watermark Tab
+1. Select an image from the Generate tab (or upload a custom image)
+2. Configure watermark settings:
+   - **Position**: `random`, `top-left`, `top-right`, `bottom-left`, `bottom-right`
+   - **Strength**: 0.0 to 1.0 (default: 1.0)
+3. Load watermark model (set path and click "Load Model")
+4. Click **Apply Watermark**
+5. View quality metrics (PSNR, SSIM) and download the result
+
+### 4. Files Structure
+
+```
+gradio_demo/
+├── gradio_app.py          # Main Gradio UI application
+├── photomaker_cli.py      # PhotoMaker generation pipeline
+├── inference.py           # Watermark injection model
+└── watermark_model.pth    # Watermark model (place here or set env var)
+
+photomaker/
+├── identity_evaluator.py  # ArcFace identity matching
+└── identity_prompt_parser.py
+
+ArcFace_similarity.py      # Standalone ArcFace comparison tool
+```
+
+### 5. Command Line Usage
+
+You can also run PhotoMaker directly from command line:
+
+```bash
+cd gradio_demo
+python photomaker_cli.py
+```
+
+Edit the configuration at the top of `photomaker_cli.py`:
+```python
+INPUT_IMAGES = ["/path/to/input.png"]
+PROMPT = "a photo of img1 and img2"
+OUTPUT_DIR = "/path/to/output"
+NUM_OUTPUTS = 2
+```
+
+---
+
 ## Usage Tips:
 - Upload more photos of the person to be customized to improve ID fidelity. If the input is Asian face(s), maybe consider adding 'Asian' before the class word, e.g., `Asian woman img`
 - When stylizing, does the generated face look too realistic? Adjust the Style strength to 30-50, the larger the number, the less ID fidelity, but the stylization ability will be better. You could also try out other base models or LoRAs with good stylization effects.
