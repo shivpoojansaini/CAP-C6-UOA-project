@@ -777,9 +777,46 @@ def generate_image(pipe, face_detector, device):
         )
 
         # -------------------------------------------------
+        # Calculate Direct and Cross Matching Scores
+        # -------------------------------------------------
+        num_faces = min(face_embeds.shape[0], ref_embeds.shape[0])
+        sim_matrix_np = sim_matrix.cpu().numpy()
+
+        # Direct matching: face[i] <-> ref[i]
+        direct_scores = []
+        for i in range(num_faces):
+            if i < sim_matrix_np.shape[0] and i < sim_matrix_np.shape[1]:
+                direct_scores.append(float(sim_matrix_np[i, i]))
+
+        # Cross matching: face[i] <-> ref[num_faces-1-i]
+        cross_scores = []
+        for i in range(num_faces):
+            j = num_faces - 1 - i
+            if i < sim_matrix_np.shape[0] and j < sim_matrix_np.shape[1]:
+                cross_scores.append(float(sim_matrix_np[i, j]))
+
+        direct_avg = sum(direct_scores) / len(direct_scores) if direct_scores else 0
+        cross_avg = sum(cross_scores) / len(cross_scores) if cross_scores else 0
+
+        print(f"\n📊 Direct Matching (positional): {direct_scores} -> Avg: {direct_avg:.4f}")
+        print(f"📊 Cross Matching (swapped): {cross_scores} -> Avg: {cross_avg:.4f}")
+
+        # Store both matching modes
+        img_result["direct_matching"] = {
+            "scores": direct_scores,
+            "average": direct_avg
+        }
+        img_result["cross_matching"] = {
+            "scores": cross_scores,
+            "average": cross_avg
+        }
+        img_result["best_mode"] = "direct" if direct_avg >= cross_avg else "cross"
+        img_result["best_average"] = max(direct_avg, cross_avg)
+
+        # -------------------------------------------------
         # Pretty Output
         # -------------------------------------------------
-        print("\n📊 Final Identity Assignment:")
+        print("\n📊 Final Identity Assignment (Optimal):")
         for face_idx, assigned_id, score in assignments:
             print(
                 f"   ✅ Face {face_idx} → Identity {assigned_id} "

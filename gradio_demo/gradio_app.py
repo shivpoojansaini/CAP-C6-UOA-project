@@ -9,6 +9,8 @@ import tempfile
 import zipfile
 from skimage.metrics import structural_similarity as ssim
 
+import random
+
 from inference import (
     WatermarkInjectionNetwork,
     AlphaEncoder,
@@ -18,6 +20,9 @@ from inference import (
     CORNERS,
     MODEL_PATH
 )
+
+# Add random option to corners
+CORNERS_WITH_RANDOM = ["random"] + CORNERS
 
 from photomaker_cli import (
     load_pipeline,
@@ -77,39 +82,104 @@ else:
 
 
 # -------------------------------------------------
+# Find best image based on ArcFace similarity
+# -------------------------------------------------
+def find_best_image(similarity_results):
+    """
+    Find the best image based on best average ArcFace similarity scores.
+    Uses the better of direct or cross matching.
+    Returns (best_index, best_avg_score) or (None, 0) if no valid results.
+    """
+    if not similarity_results:
+        return None, 0
+
+    best_idx = None
+    best_avg_score = -1
+
+    for result in similarity_results:
+        if result.get("error"):
+            continue
+
+        # Use the best of direct or cross matching average
+        best_avg = result.get("best_average", 0)
+        if best_avg == 0 and result.get("assignments"):
+            # Fallback to optimal assignment average
+            scores = [a["similarity"] for a in result["assignments"]]
+            best_avg = sum(scores) / len(scores) if scores else 0
+
+        if best_avg > best_avg_score:
+            best_avg_score = best_avg
+            best_idx = result["image_idx"]
+
+    return best_idx, best_avg_score
+
+
+def get_quality_label(score):
+    """Get quality label for similarity score."""
+    if score >= 0.6:
+        return "Excellent"
+    elif score >= 0.45:
+        return "Good"
+    elif score >= 0.3:
+        return "Fair"
+    else:
+        return "Low"
+
+
+# -------------------------------------------------
 # Format ArcFace similarity results
 # -------------------------------------------------
-def format_similarity_results(similarity_results):
+def format_similarity_results(similarity_results, best_idx=None):
     if not similarity_results:
         return "No similarity data available"
 
     output_lines = []
     for result in similarity_results:
         img_idx = result["image_idx"]
-        output_lines.append(f"Image {img_idx + 1}:")
+        is_best = (img_idx == best_idx)
+        best_marker = " [BEST]" if is_best else ""
+        output_lines.append(f"Image {img_idx + 1}{best_marker}:")
 
         if result.get("error"):
             output_lines.append(f"  {result['error']}")
-        elif result.get("assignments"):
-            for assignment in result["assignments"]:
-                face_idx = assignment["face_idx"]
-                identity_idx = assignment["identity_idx"]
-                similarity = assignment["similarity"]
-                # Classify similarity score
-                if similarity >= 0.6:
-                    quality = "Excellent"
-                elif similarity >= 0.45:
-                    quality = "Good"
-                elif similarity >= 0.3:
-                    quality = "Fair"
-                else:
-                    quality = "Low"
-                output_lines.append(
-                    f"  Face {face_idx + 1} -> Identity {identity_idx + 1}: "
-                    f"{similarity:.4f} ({quality})"
-                )
         else:
-            output_lines.append("  No faces matched")
+            # Show Direct Matching (positional: left-to-left, right-to-right)
+            direct = result.get("direct_matching", {})
+            cross = result.get("cross_matching", {})
+            best_mode = result.get("best_mode", "direct")
+
+            if direct.get("scores"):
+                direct_avg = direct.get("average", 0)
+                direct_marker = " <-- BETTER" if best_mode == "direct" else ""
+                output_lines.append(f"  Direct (L1-L2, R1-R2): Avg {direct_avg:.4f} ({get_quality_label(direct_avg)}){direct_marker}")
+                for i, score in enumerate(direct["scores"]):
+                    output_lines.append(f"    Face {i+1} <-> Identity {i+1}: {score:.4f}")
+
+            if cross.get("scores"):
+                cross_avg = cross.get("average", 0)
+                cross_marker = " <-- BETTER" if best_mode == "cross" else ""
+                output_lines.append(f"  Cross (L1-R2, R1-L2): Avg {cross_avg:.4f} ({get_quality_label(cross_avg)}){cross_marker}")
+                num_faces = len(cross["scores"])
+                for i, score in enumerate(cross["scores"]):
+                    j = num_faces - 1 - i
+                    output_lines.append(f"    Face {i+1} <-> Identity {j+1}: {score:.4f}")
+
+            # Show optimal assignment
+            if result.get("assignments"):
+                output_lines.append(f"  Optimal Assignment:")
+                for assignment in result["assignments"]:
+                    face_idx = assignment["face_idx"]
+                    identity_idx = assignment["identity_idx"]
+                    similarity = assignment["similarity"]
+                    output_lines.append(
+                        f"    Face {face_idx + 1} -> Identity {identity_idx + 1}: "
+                        f"{similarity:.4f} ({get_quality_label(similarity)})"
+                    )
+
+            # Show best average
+            best_avg = result.get("best_average", 0)
+            if best_avg > 0:
+                output_lines.append(f"  Best Average: {best_avg:.4f} ({best_mode} matching)")
 
         output_lines.append("")
 
@@ -119,14 +189,14 @@ def format_similarity_results(similarity_results):
 # -------------------------------------------------
 # PhotoMaker wrapper with progress indicator
 # -------------------------------------------------
-def run_photomaker(image, prompt, progress=gr.Progress()):
+def run_photomaker(image, prompt, show_best_only, progress=gr.Progress()):
     import photomaker_cli
 
     if image is None:
-        return [], "Please upload an input image", [], None
+        return [], "Please upload an input image", [], None, None
 
     if not prompt or not prompt.strip():
-        return [], "Please enter a prompt with identity triggers (e.g., 'a photo of img1')", [], None
+        return [], "Please enter a prompt with identity triggers (e.g., 'a photo of img1')", [], None, None
 
     progress(0, desc="Preparing input...")
     temp_path = "/tmp/pm_input.png"
@@ -144,16 +214,30 @@ def run_photomaker(image, prompt, progress=gr.Progress()):
         images, seed, similarity_results = generate_image(pipe, face_detector, device)
         progress(0.9, desc="Processing results...")
         pil_images = list(images)
-        similarity_text = format_similarity_results(similarity_results)
+
+        # Find best image based on similarity
+        best_idx, best_score = find_best_image(similarity_results)
+        similarity_text = format_similarity_results(similarity_results, best_idx)
+
+        # Get best image for display
+        best_image = pil_images[best_idx] if best_idx is not None and best_idx < len(pil_images) else None
+
+        # Decide what to show in gallery
+        if show_best_only and best_image is not None:
+            gallery_images = [best_image]
+            gallery_state_images = [best_image]
+        else:
+            gallery_images = pil_images
+            gallery_state_images = pil_images
 
         # Create downloadable zip file
         progress(0.95, desc="Preparing download...")
         download_path = create_download_zip(pil_images, "generated")
 
         progress(1.0, desc="Done!")
-        return pil_images, similarity_text, pil_images, download_path
+        return gallery_images, similarity_text, gallery_state_images, download_path, best_image
     except Exception as e:
-        return [], f"Error: {str(e)}", [], None
+        return [], f"Error: {str(e)}", [], None, None
 
 
 # -------------------------------------------------
@@ -250,7 +334,7 @@ def process_watermark_np(image_rgb: np.ndarray, corner: str, strength: float):
 # -------------------------------------------------
 def run_watermark(selected_image, custom_image, use_custom, corner, strength, progress=gr.Progress()):
     if wm_model is None:
-        return None, None, "Model not loaded", "Model not loaded", None
+        return None, None, "Model not loaded", "Model not loaded", None, ""
 
     if use_custom and custom_image is not None:
         image_to_use = custom_image
@@ -258,11 +342,16 @@ def run_watermark(selected_image, custom_image, use_custom, corner, strength, pr
         image_to_use = selected_image
 
     if image_to_use is None:
-        return None, None, "No image selected", "No image selected", None
+        return None, None, "No image selected", "No image selected", None, ""
 
-    progress(0.2, desc="Processing watermark...")
+    # Handle random corner selection
+    actual_corner = corner
+    if corner == "random":
+        actual_corner = random.choice(CORNERS)
+
+    progress(0.2, desc=f"Processing watermark ({actual_corner})...")
     original_np = np.array(image_to_use.convert("RGB"))
-    wm_np, alpha_np = process_watermark_np(original_np, corner, strength)
+    wm_np, alpha_np = process_watermark_np(original_np, actual_corner, strength)
 
     progress(0.8, desc="Computing quality metrics...")
     psnr_value, ssim_value = compute_psnr_ssim(original_np, wm_np)
@@ -271,7 +360,7 @@ def run_watermark(selected_image, custom_image, use_custom, corner, strength, pr
     progress(0.9, desc="Preparing download...")
     wm_image = Image.fromarray(wm_np)
     temp_dir = tempfile.mkdtemp()
-    download_path = os.path.join(temp_dir, "watermarked_image.png")
+    download_path = os.path.join(temp_dir, f"watermarked_{actual_corner}.png")
     wm_image.save(download_path)
 
     progress(1.0, desc="Done!")
@@ -280,7 +369,8 @@ def run_watermark(selected_image, custom_image, use_custom, corner, strength, pr
         Image.fromarray(alpha_np),
         f"{psnr_value:.4f} dB",
         f"{ssim_value:.4f}",
-        download_path
+        download_path,
+        f"Position: {actual_corner}"
     )
 
 
@@ -322,30 +412,48 @@ with gr.Blocks(
                         placeholder="e.g., 'a photo of img1 and img2 standing together'",
                         info="Use img1, img2, etc. to reference detected faces"
                     )
+                    show_best_only = gr.Checkbox(
+                        label="Show best image only",
+                        value=True,
+                        info="Display only the image with highest identity similarity"
+                    )
                     run_btn = gr.Button("Generate", variant="primary", size="lg")
 
                 with gr.Column(scale=2):
-                    output_gallery = gr.Gallery(
-                        label="Generated Images",
-                        columns=2,
-                        height=350,
-                        object_fit="contain",
+                    best_image_display = gr.Image(
+                        type="pil",
+                        label="Best Image (Highest Similarity)",
+                        height=300,
                         show_label=True
                     )
-                    with gr.Row():
-                        gr.Markdown("*Click an image to select it for watermarking*")
-                        download_generated = gr.File(
-                            label="Download All",
-                            visible=True,
-                            file_count="single"
+                    with gr.Accordion("All Generated Images", open=False):
+                        output_gallery = gr.Gallery(
+                            label="All Images",
+                            columns=2,
+                            height=250,
+                            object_fit="contain",
+                            show_label=True
                         )
+                        gr.Markdown("*Click an image to select it for watermarking*")
+
+                    download_generated = gr.File(
+                        label="Download All Images",
+                        visible=True,
+                        file_count="single"
+                    )
 
             with gr.Accordion("ArcFace Identity Similarity", open=True):
+                gr.Markdown("""
+                **Matching Modes:**
+                - **Direct**: Left face → Left identity, Right face → Right identity
+                - **Cross**: Left face → Right identity, Right face → Left identity
+                - **Optimal**: Best assignment regardless of position
+                """)
                 similarity_box = gr.Textbox(
                     label="Face Matching Results",
-                    lines=6,
+                    lines=12,
                     interactive=False,
-                    info="Cosine similarity between input and generated faces (0-1 scale)"
+                    info="Shows both direct and cross matching. [BEST] marks the image with highest similarity."
                 )
 
             gallery_state = gr.State([])
@@ -353,14 +461,21 @@ with gr.Blocks(
 
             run_btn.click(
                 fn=run_photomaker,
-                inputs=[input_image, prompt],
-                outputs=[output_gallery, similarity_box, gallery_state, download_generated]
+                inputs=[input_image, prompt, show_best_only],
+                outputs=[output_gallery, similarity_box, gallery_state, download_generated, best_image_display]
             )
 
             output_gallery.select(
                 fn=pick_image,
                 inputs=[gallery_state],
                 outputs=selected_image_state
+            )
+
+            # Also allow selecting best image for watermarking
+            best_image_display.change(
+                fn=lambda img: img,
+                inputs=[best_image_display],
+                outputs=[selected_image_state]
             )
 
         # ---------------- Watermark Tab ----------------
@@ -423,9 +538,10 @@ with gr.Blocks(
 
                 with gr.Column(scale=1):
                     corner_dropdown = gr.Dropdown(
-                        choices=CORNERS,
-                        value="bottom-right",
-                        label="Watermark Position"
+                        choices=CORNERS_WITH_RANDOM,
+                        value="random",
+                        label="Watermark Position",
+                        info="Select 'random' for automatic corner selection"
                     )
 
                     strength_slider = gr.Slider(
@@ -449,6 +565,12 @@ with gr.Blocks(
                             interactive=False,
                             scale=1
                         )
+
+                    position_box = gr.Textbox(
+                        label="Applied Position",
+                        interactive=False,
+                        info="Shows actual position used (useful when 'random' is selected)"
+                    )
 
             with gr.Row():
                 wm_output = gr.Image(
@@ -483,7 +605,7 @@ with gr.Blocks(
                     corner_dropdown,
                     strength_slider
                 ],
-                outputs=[wm_output, alpha_output, psnr_box, ssim_box, download_watermarked]
+                outputs=[wm_output, alpha_output, psnr_box, ssim_box, download_watermarked, position_box]
             )
 
 demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
