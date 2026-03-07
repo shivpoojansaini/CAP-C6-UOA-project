@@ -543,11 +543,6 @@ with gr.Blocks(
                         label="Watermarked Output",
                         height=300
                     )
-                    download_watermarked = gr.File(
-                        label="Download",
-                        visible=True,
-                        file_count="single"
-                    )
 
             # Controls row
             with gr.Row():
@@ -569,12 +564,13 @@ with gr.Blocks(
 
             # Metrics row
             with gr.Row():
-                position_box = gr.Textbox(label="Position Used", interactive=False, scale=1)
                 psnr_box = gr.Textbox(label="PSNR", interactive=False, scale=1)
                 ssim_box = gr.Textbox(label="SSIM", interactive=False, scale=1)
 
-            # Hidden alpha output (still computed but not displayed)
+            # Hidden outputs (still computed but not displayed)
             alpha_output = gr.Image(type="pil", visible=False)
+            download_watermarked = gr.File(visible=False)
+            position_box = gr.Textbox(visible=False)
 
             selected_image_state.change(
                 fn=lambda img: img,
