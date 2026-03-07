@@ -442,7 +442,7 @@ with gr.Blocks(
                         file_count="single"
                     )
 
-            with gr.Accordion("ArcFace Identity Similarity", open=True):
+            with gr.Accordion("ArcFace Identity Similarity", open=False):
                 gr.Markdown("""
                 **Matching Modes:**
                 - **Direct**: Left face → Left identity, Right face → Right identity
@@ -480,28 +480,25 @@ with gr.Blocks(
 
         # ---------------- Watermark Tab ----------------
         with gr.Tab("Watermark"):
-            gr.Markdown("### Add Invisible Watermark")
-
-            # Model loading section
-            with gr.Accordion("Watermark Model Settings", open=(wm_model is None)):
-                with gr.Row():
-                    model_path_input = gr.Textbox(
-                        label="Model Path",
-                        placeholder="/path/to/watermark_model.pth",
-                        value=wm_model_path or "",
-                        scale=4
-                    )
-                    load_model_btn = gr.Button("Load Model", scale=1)
-
+            # Compact model loading section
+            with gr.Row():
+                model_path_input = gr.Textbox(
+                    label="Model Path",
+                    placeholder="/path/to/watermark_model.pth",
+                    value=wm_model_path or "",
+                    scale=3
+                )
+                load_model_btn = gr.Button("Load", scale=1, size="sm")
                 model_status = gr.Textbox(
                     label="Status",
-                    value="Model loaded" if wm_model is not None else "No model loaded",
-                    interactive=False
+                    value="Loaded" if wm_model is not None else "Not loaded",
+                    interactive=False,
+                    scale=1
                 )
 
                 def handle_load_model(path):
                     status, success = load_watermark_model(path)
-                    return status
+                    return "Loaded" if success else "Failed"
 
                 load_model_btn.click(
                     fn=handle_load_model,
@@ -509,13 +506,15 @@ with gr.Blocks(
                     outputs=[model_status]
                 )
 
-            # Watermark controls
+            # Main content: Input and Output side by side
             with gr.Row():
+                # Left column: Input
                 with gr.Column(scale=1):
+                    gr.Markdown("#### Input")
                     selected_image_display = gr.Image(
                         type="pil",
                         label="Selected Image",
-                        height=250
+                        height=300
                     )
 
                     use_custom_toggle = gr.Checkbox(
@@ -536,59 +535,46 @@ with gr.Blocks(
                         outputs=custom_image_upload
                     )
 
+                # Right column: Output
                 with gr.Column(scale=1):
-                    corner_dropdown = gr.Dropdown(
-                        choices=CORNERS_WITH_RANDOM,
-                        value="random",
-                        label="Watermark Position",
-                        info="Select 'random' for automatic corner selection"
+                    gr.Markdown("#### Output")
+                    wm_output = gr.Image(
+                        type="pil",
+                        label="Watermarked Output",
+                        height=300
+                    )
+                    download_watermarked = gr.File(
+                        label="Download",
+                        visible=True,
+                        file_count="single"
                     )
 
-                    strength_slider = gr.Slider(
-                        minimum=0.0,
-                        maximum=1.0,
-                        value=1.0,
-                        step=0.05,
-                        label="Watermark Strength"
-                    )
-
-                    wm_btn = gr.Button("Apply Watermark", variant="primary")
-
-                    with gr.Row():
-                        psnr_box = gr.Textbox(
-                            label="PSNR",
-                            interactive=False,
-                            scale=1
-                        )
-                        ssim_box = gr.Textbox(
-                            label="SSIM",
-                            interactive=False,
-                            scale=1
-                        )
-
-                    position_box = gr.Textbox(
-                        label="Applied Position",
-                        interactive=False,
-                        info="Shows actual position used (useful when 'random' is selected)"
-                    )
-
+            # Controls row
             with gr.Row():
-                wm_output = gr.Image(
-                    type="pil",
-                    label="Watermarked Output",
-                    height=300
+                corner_dropdown = gr.Dropdown(
+                    choices=CORNERS_WITH_RANDOM,
+                    value="random",
+                    label="Position",
+                    scale=1
                 )
-                alpha_output = gr.Image(
-                    type="pil",
-                    label="Alpha Matte (Visualization)",
-                    height=300
+                strength_slider = gr.Slider(
+                    minimum=0.0,
+                    maximum=1.0,
+                    value=0.2,
+                    step=0.05,
+                    label="Strength",
+                    scale=2
                 )
+                wm_btn = gr.Button("Apply Watermark", variant="primary", scale=1)
 
-            download_watermarked = gr.File(
-                label="Download Watermarked Image",
-                visible=True,
-                file_count="single"
-            )
+            # Metrics row
+            with gr.Row():
+                position_box = gr.Textbox(label="Position Used", interactive=False, scale=1)
+                psnr_box = gr.Textbox(label="PSNR", interactive=False, scale=1)
+                ssim_box = gr.Textbox(label="SSIM", interactive=False, scale=1)
+
+            # Hidden alpha output (still computed but not displayed)
+            alpha_output = gr.Image(type="pil", visible=False)
 
             selected_image_state.change(
                 fn=lambda img: img,
