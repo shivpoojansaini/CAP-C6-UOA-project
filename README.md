@@ -202,91 +202,99 @@ If you want to run it on MAC, you should follow [this Instruction](MacGPUEnv.md)
 
 ---
 
-# 🚀 CAP-C6-Group-3 Extension
+# 🚀 CAP-C6-Group-3 Extension: Ethical AI Image Generation
 
-This extension adds **Multi-Identity Face Generation with ArcFace Similarity Evaluation** and **Invisible Watermarking** capabilities.
+## Overview
+
+This extension enhances PhotoMaker with **Multi-Identity Face Generation** and **Invisible Watermarking** to address ethical concerns in AI-generated imagery. As AI-generated faces become increasingly realistic, it is crucial to:
+
+1. **Ensure Transparency**: Watermark AI-generated content to distinguish it from real photographs
+2. **Prevent Misuse**: Enable detection and tracing of synthetic media
+3. **Maintain Accountability**: Support responsible AI image generation practices
+
+## Ethical Motivation
+
+The rise of realistic AI-generated faces poses significant ethical challenges:
+- **Misinformation**: Fake images can be used to spread false information
+- **Identity Fraud**: Synthetic faces may be misused for impersonation
+- **Trust Erosion**: Difficulty distinguishing real from fake undermines digital trust
+
+Our solution embeds **invisible watermarks** into AI-generated images, making them traceable while preserving visual quality. This supports ethical AI practices by enabling:
+- Detection of AI-generated content
+- Verification of image authenticity
+- Responsible use of face generation technology
 
 ## Features
 
-- **Multi-Identity Generation**: Generate images with multiple faces using `img1`, `img2` trigger words
-- **ArcFace Similarity Scoring**: Automatic face matching with Direct/Cross/Optimal comparison modes
-- **Best Image Selection**: Automatically identifies the best generated image based on identity similarity
-- **Invisible Watermarking**: Add invisible watermarks with configurable position and strength
-- **Quality Metrics**: PSNR and SSIM measurements for watermark quality
+| Feature | Description |
+|---------|-------------|
+| **Multi-Identity Generation** | Generate images with multiple faces using `img1`, `img2` trigger words |
+| **ArcFace Similarity Scoring** | Verify identity preservation with cosine similarity metrics |
+| **Invisible Watermarking** | Embed imperceptible watermarks for traceability |
+| **Quality Metrics** | PSNR and SSIM ensure watermark invisibility |
 
 ## Quick Start
 
-### 1. Run the Extended Gradio Demo
+### 1. Install Dependencies
+
+```bash
+conda create --name photomaker python=3.10
+conda activate photomaker
+pip install -r requirements.txt
+```
+
+### 2. Run the Application
 
 ```bash
 cd gradio_demo
 python gradio_app.py
 ```
 
-The app will be available at `http://localhost:7860` and will also create a public share link.
+Access the app at `http://localhost:7860`
 
-### 2. Environment Variables (Optional)
+### 3. Set Watermark Model Path (Optional)
 
 ```bash
-# Set custom watermark model path
-export WATERMARK_MODEL_PATH="/path/to/your/watermark_model.pth"
+export WATERMARK_MODEL_PATH="/path/to/watermark_model.pth"
 ```
 
-### 3. Usage
+Or configure directly in the UI.
 
-#### Generate Tab
-1. Upload an input image containing one or more faces
-2. Enter a prompt using identity triggers:
-   - Single identity: `"a photo of img1 in a park"`
-   - Multiple identities: `"img1 and img2 standing together"`
-3. Check **"Show best image only"** to display only the highest-scoring result
-4. Click **Generate** and wait for the results
-5. View **ArcFace Identity Similarity** scores:
-   - **Direct matching**: Left face → Left identity, Right face → Right identity
-   - **Cross matching**: Left face → Right identity, Right face → Left identity
-   - **[BEST]** marker indicates the image with highest similarity
+## Usage
 
-#### Watermark Tab
-1. Select an image from the Generate tab (or upload a custom image)
-2. Configure watermark settings:
-   - **Position**: `random`, `top-left`, `top-right`, `bottom-left`, `bottom-right`
-   - **Strength**: 0.0 to 1.0 (default: 1.0)
-3. Load watermark model (set path and click "Load Model")
-4. Click **Apply Watermark**
-5. View quality metrics (PSNR, SSIM) and download the result
+### Generate Tab
+1. Upload an input image with one or more faces
+2. Enter prompt with identity triggers: `"a photo of img1 and img2 together"`
+3. Click **Generate**
+4. Best image is automatically selected based on identity similarity
 
-### 4. Files Structure
+### Watermark Tab
+1. Select a generated image (or upload custom)
+2. Configure position (`random`, `top-left`, etc.) and strength (default: 0.2)
+3. Click **Apply Watermark**
+4. Watermarked image is ready with embedded invisible marker
+
+## Project Structure
 
 ```
 gradio_demo/
-├── gradio_app.py          # Main Gradio UI application
-├── photomaker_cli.py      # PhotoMaker generation pipeline
-├── inference.py           # Watermark injection model
-└── watermark_model.pth    # Watermark model (place here or set env var)
+├── gradio_app.py          # Main Gradio UI
+├── photomaker_cli.py      # Generation pipeline with ArcFace
+├── inference.py           # Watermark injection network
+└── watermark_model.pth    # Pre-trained watermark model
 
 photomaker/
-├── identity_evaluator.py  # ArcFace identity matching
-└── identity_prompt_parser.py
-
-ArcFace_similarity.py      # Standalone ArcFace comparison tool
+├── identity_evaluator.py  # ArcFace similarity evaluation
+└── pipeline.py            # Multi-identity PhotoMaker pipeline
 ```
 
-### 5. Command Line Usage
+## Ethical Guidelines
 
-You can also run PhotoMaker directly from command line:
-
-```bash
-cd gradio_demo
-python photomaker_cli.py
-```
-
-Edit the configuration at the top of `photomaker_cli.py`:
-```python
-INPUT_IMAGES = ["/path/to/input.png"]
-PROMPT = "a photo of img1 and img2"
-OUTPUT_DIR = "/path/to/output"
-NUM_OUTPUTS = 2
-```
+When using this tool, please:
+- Always watermark AI-generated images before sharing
+- Do not use generated faces for deception or fraud
+- Disclose when images are AI-generated
+- Respect privacy and consent of individuals in reference images
 
 ---
 
