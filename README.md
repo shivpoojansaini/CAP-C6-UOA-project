@@ -75,8 +75,61 @@ PhotoMaker V2, as a plugin, can work well with other plugins, such as IP-Adapter
 ## LICENSE
 Since PhotoMaker V2 relies on [InsightFace](https://github.com/deepinsight/insightface), it also needs to comply with its [license](https://github.com/deepinsight/insightface?tab=readme-ov-file#license).
 
+---
 
+# CAP-C6-Group-3: Multi-Identity Generation with Ethical Watermarking
 
+## Why Watermarking?
+
+As AI-generated faces become more realistic, distinguishing them from real photos is increasingly difficult. This creates risks:
+- Misinformation and fake news
+- Identity fraud and impersonation
+- Erosion of trust in digital media
+
+**Our solution**: Embed invisible watermarks into AI-generated images, enabling detection and traceability while maintaining visual quality.
+
+## Features
+
+- **Multi-Identity Generation** - Use `img1`, `img2` triggers to generate images with multiple faces
+- **ArcFace Similarity** - Verify identity preservation with cosine similarity scoring
+- **Invisible Watermarking** - Embed imperceptible markers for ethical AI transparency
+- **Quality Metrics** - PSNR/SSIM ensure watermark invisibility
+
+## Quick Start
+
+```bash
+# Install
+conda create --name photomaker python=3.10
+conda activate photomaker
+pip install -r requirements.txt
+
+# Run
+cd gradio_demo
+python gradio_app.py
+```
+
+App runs at `http://localhost:7860`
+
+## Usage
+
+**Generate Tab**: Upload image → Enter prompt (`"photo of img1 and img2"`) → Generate
+
+**Watermark Tab**: Select image → Set position/strength → Apply Watermark
+
+## Files
+
+| File | Description |
+|------|-------------|
+| `gradio_demo/gradio_app.py` | Main UI application |
+| `gradio_demo/photomaker_cli.py` | Generation pipeline |
+| `gradio_demo/inference.py` | Watermark injection |
+| `photomaker/identity_evaluator.py` | ArcFace evaluation |
+
+## Ethical Use
+
+- Always watermark AI-generated images before sharing
+- Disclose when content is AI-generated
+- Do not use for deception or fraud
 
 
 
