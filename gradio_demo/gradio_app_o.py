@@ -151,18 +151,14 @@ def format_similarity_results(similarity_results, best_idx=None):
             if direct.get("scores"):
                 direct_avg = direct.get("average", 0)
                 direct_marker = " <-- BETTER" if best_mode == "direct" else ""
-                output_lines.append(
-                    f"  Direct (L1-L2, R1-R2): Avg {direct_avg:.4f} ({get_quality_label(direct_avg)}){direct_marker}"
-                )
+                output_lines.append(f"  Direct (L1-L2, R1-R2): Avg {direct_avg:.4f} ({get_quality_label(direct_avg)}){direct_marker}")
                 for i, score in enumerate(direct["scores"]):
                     output_lines.append(f"    Face {i+1} <-> Identity {i+1}: {score:.4f}")
 
             if cross.get("scores"):
                 cross_avg = cross.get("average", 0)
                 cross_marker = " <-- BETTER" if best_mode == "cross" else ""
-                output_lines.append(
-                    f"  Cross (L1-R2, R1-L2): Avg {cross_avg:.4f} ({get_quality_label(cross_avg)}){cross_marker}"
-                )
+                output_lines.append(f"  Cross (L1-R2, R1-L2): Avg {cross_avg:.4f} ({get_quality_label(cross_avg)}){cross_marker}")
                 num_faces = len(cross["scores"])
                 for i, score in enumerate(cross["scores"]):
                     j = num_faces - 1 - i
@@ -282,112 +278,6 @@ def compute_psnr_ssim(original_rgb: np.ndarray, watermarked_rgb: np.ndarray):
 
 
 # -------------------------------------------------
-# DCT Watermarking (CAP-C6_Group-3)
-# -------------------------------------------------
-WATERMARK_TEXT = "UOA"
-
-
-REPEAT = 20   # Option B strength
-
-def dct_embed(image: np.ndarray, text: str = WATERMARK_TEXT, strength: float = 35.0):
-    """
-    Robust DCT watermark embedding using bit repetition + majority voting.
-    Embeds into Y channel only (color preserved).
-    """
-    # Convert to YCrCb
-    ycrcb = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb)
-    Y, Cr, Cb = cv2.split(ycrcb)
-
-    Y = Y.astype(np.float32)
-    h, w = Y.shape
-
-    # Convert text to bits
-    bits = ''.join([format(ord(c), '08b') for c in text])
-    repeated_bits = ''.join([b * REPEAT for b in bits])  # repeat each bit 20×
-    total_bits = len(repeated_bits)
-
-    wm_Y = Y.copy()
-    bit_idx = 0
-
-    for y in range(0, h, 8):
-        for x in range(0, w, 8):
-            if bit_idx >= total_bits:
-                break
-
-            block = wm_Y[y:y+8, x:x+8]
-            if block.shape != (8, 8):
-                continue
-
-            dct_block = cv2.dct(block)
-
-            bit = int(repeated_bits[bit_idx])
-            if bit == 1:
-                dct_block[3, 3] += strength
-            else:
-                dct_block[3, 3] -= strength
-
-            wm_Y[y:y+8, x:x+8] = cv2.idct(dct_block)
-            bit_idx += 1
-
-    wm_Y = np.clip(wm_Y, 0, 255).astype(np.uint8)
-
-    # Recombine Y + original CrCb
-    wm_ycrcb = cv2.merge([wm_Y, Cr, Cb])
-    wm_rgb = cv2.cvtColor(wm_ycrcb, cv2.COLOR_YCrCb2RGB)
-
-    return wm_rgb
-
-
-
-
-def dct_extract(image: np.ndarray, text_length: int = len(WATERMARK_TEXT)):
-    """
-    Robust DCT extraction using majority voting.
-    Reads EXACT number of repeated bits needed.
-    """
-    ycrcb = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb)
-    Y, _, _ = cv2.split(ycrcb)
-
-    Y = Y.astype(np.float32)
-    h, w = Y.shape
-
-    needed_bits = text_length * 8 * REPEAT
-    raw_bits = []
-
-    # Read EXACT number of blocks needed
-    for y in range(0, h, 8):
-        for x in range(0, w, 8):
-            if len(raw_bits) >= needed_bits:
-                break
-
-            block = Y[y:y+8, x:x+8]
-            if block.shape != (8, 8):
-                continue
-
-            dct_block = cv2.dct(block)
-            raw_bits.append(1 if dct_block[3, 3] > 0 else 0)
-
-        if len(raw_bits) >= needed_bits:
-            break
-
-    # Majority voting per bit
-    bits = []
-    for i in range(0, needed_bits, REPEAT):
-        chunk = raw_bits[i:i+REPEAT]
-        bits.append(1 if sum(chunk) > (REPEAT // 2) else 0)
-
-    # Convert bits → characters
-    chars = []
-    for i in range(0, len(bits), 8):
-        byte = bits[i:i+8]
-        chars.append(chr(int(''.join(str(b) for b in byte), 2)))
-
-    return ''.join(chars)
-
-
-
-
-# -------------------------------------------------
 # Core watermark processing (numpy RGB)
 # -------------------------------------------------
 def process_watermark_np(image_rgb: np.ndarray, corner: str, strength: float):
@@ -480,10 +370,8 @@ def run_watermark(selected_image, custom_image, use_custom, corner, strength, pr
         f"{psnr_value:.4f} dB",
         f"{ssim_value:.4f}",
         download_path,
-        f"Position: {actual_corner}",
-        wm_image   # <-- NEW: store into state
+        f"Position: {actual_corner}"
     )
-
 
 
 # -------------------------------------------------
@@ -570,7 +458,6 @@ with gr.Blocks(
 
             gallery_state = gr.State([])
             selected_image_state = gr.State()
-            watermarked_image_state = gr.State()
 
             run_btn.click(
                 fn=run_photomaker,
@@ -693,67 +580,14 @@ with gr.Blocks(
 
             wm_btn.click(
                 fn=run_watermark,
-                inputs=[selected_image_state, custom_image_upload, use_custom_toggle, corner_dropdown, strength_slider],
-                outputs=[wm_output, alpha_output, psnr_box, ssim_box, download_watermarked, position_box, watermarked_image_state]
+                inputs=[
+                    selected_image_state,
+                    custom_image_upload,
+                    use_custom_toggle,
+                    corner_dropdown,
+                    strength_slider
+                ],
+                outputs=[wm_output, alpha_output, psnr_box, ssim_box, download_watermarked, position_box]
             )
-
-
-        # ---------------- DCT Watermark Tab ----------------
-        with gr.Tab("DCT Watermark"):
-            gr.Markdown("### DCT Watermarking — CAP-C6_Group-3")
-            wm_text_input = gr.Textbox(
-                label="Watermark Text",
-                value="UOA",
-                placeholder="Enter text to embed",
-            )
-
-
-            with gr.Row():
-                dct_input = gr.Image(type="pil", label="Input Image", height=300)
-                dct_output = gr.Image(type="pil", label="Watermarked Image", height=300)
-
-            # 🔥 Step 3: Auto-load watermarked image from Watermark tab
-            watermarked_image_state.change(
-                fn=lambda img: img,
-                inputs=watermarked_image_state,
-                outputs=dct_input
-            )
-
-            embed_btn = gr.Button("Embed DCT Watermark", variant="primary")
-
-            extracted_text_box = gr.Textbox(
-                label="Extracted Watermark",
-                interactive=False
-            )
-
-            extract_btn = gr.Button("Extract Watermark")
-
-            def run_dct_embed(img, text):
-                if img is None:
-                    return None
-                np_img = np.array(img.convert("RGB"))
-                wm = dct_embed(np_img, text=text)
-                return Image.fromarray(wm)
-
-            embed_btn.click(
-                fn=run_dct_embed,
-                inputs=[dct_input, wm_text_input],
-                outputs=[dct_output]
-            )
-
-
-            def run_dct_extract(img, text):
-                if img is None:
-                    return "No image"
-                np_img = np.array(img.convert("RGB"))
-                extracted = dct_extract(np_img, text_length=len(text))
-                return extracted
-
-            extract_btn.click(
-                fn=run_dct_extract,
-                inputs=[dct_output, wm_text_input],
-                outputs=[extracted_text_box]
-            )
-
 
 demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
